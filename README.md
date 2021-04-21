@@ -1,2 +1,2 @@
 # Paykan
-Nginx but with engine of Paykan
+Nginx but with the engine of Paykan
