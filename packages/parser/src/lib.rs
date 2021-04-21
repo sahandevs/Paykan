@@ -23,9 +23,8 @@ fn parse_block(input: &str) -> (Block, &str) {
         directives: Vec::new(),
     };
     let mut rest = input;
-    let mut last_index = 0;
+    let mut last_index;
     'outer: loop {
-        last_index = 0;
         'inner: for (i, char) in rest.chars().enumerate() {
             last_index = i;
             match char {
@@ -42,7 +41,8 @@ fn parse_block(input: &str) -> (Block, &str) {
             break 'inner;
         }
     }
-    (block, &rest[last_index..])
+    let rest = if rest.trim() == "" { "" } else { &rest[last_index..] };
+    (block, rest)
 }
 
 pub fn parse_directive(input: &str) -> (Directive, &str) {
@@ -68,10 +68,17 @@ pub fn parse_directive(input: &str) -> (Directive, &str) {
             } else if char == ' ' {
                 is_name = false;
                 continue;
+            } else if char == ';' {
+                break;
             }
             name.push(char);
         } else {
             if char == ';' {
+                if let ParameterType::Simple = parameter_type {
+                    if parameter_value.is_empty() {
+                        break;
+                    }
+                }
                 let param = (parameter_type, parameter_value);
                 parameters.push(param);
                 break;
@@ -126,7 +133,7 @@ pub fn parse_directive(input: &str) -> (Directive, &str) {
             name,
             parameters,
         },
-        rest.unwrap_or_else(|| &input[last_index + 1..]),
+        rest.map(|x| &x[1..]).unwrap_or_else(|| &input[last_index + 1..]),
     )
 }
 
@@ -149,7 +156,6 @@ directive1 'par1' par3 "'a" {
 dir2;
         "#,
         );
-        panic!("{:#?}", result);
         assert_eq!(result.directives.len(), 2);
         let directive1 = result.directives.get(0).unwrap();
         assert_eq!(directive1.parameters.len(), 3);
@@ -168,7 +174,7 @@ dir2;
         assert_eq!(block.directives.get(0).unwrap().name, "hello");
         assert_eq!(block.directives.get(1).unwrap().name, "hi");
         assert_eq!(block.directives.get(0).unwrap().parameters.len(), 1);
-        assert_eq!(block.directives.get(1).unwrap().parameters.len(), 0);
+        assert_eq!(block.directives.get(1).unwrap().parameters.len(), 1);
         assert_eq!(
             block
                 .directives
@@ -193,7 +199,7 @@ dir2;
         );
 
         let directive2 = result.directives.get(1).unwrap();
-        assert_eq!(directive2.name, "directive1");
+        assert_eq!(directive2.name, "dir2");
         assert_eq!(directive2.parameters.len(), 0);
         assert!(directive2.block.is_none());
     }
