@@ -113,9 +113,7 @@ pub fn parse_directive(input: &str) -> (Directive, &str) {
                 match (&parameter_type, char) {
                     (ParameterType::SingleQuote, '\'')
                     | (ParameterType::DoubleQuote, '"')
-                    | (ParameterType::Simple, ' ')
-                    | (ParameterType::Simple, '\t')
-                    | (ParameterType::Simple, ';') => {
+                    | (ParameterType::Simple, ' ' | '\t' | ';') => {
                         is_parameter_ended = true;
                         let mut value = String::new();
                         let mut par_type = ParameterType::Simple;
