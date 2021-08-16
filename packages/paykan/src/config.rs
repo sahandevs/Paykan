@@ -5,10 +5,12 @@ pub struct Config {
     pub http: Http,
 }
 
+#[derive(Debug, Clone)]
 pub struct Http {
     pub servers: Vec<Server>,
 }
 
+#[derive(Debug, Clone)]
 pub struct Server {
     pub server_name: String,
     pub listen: SocketAddr,
