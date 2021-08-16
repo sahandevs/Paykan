@@ -41,7 +41,11 @@ fn parse_block(input: &str) -> (Block, &str) {
             break 'inner;
         }
     }
-    let rest = if rest.trim() == "" { "" } else { &rest[last_index..] };
+    let rest = if rest.trim() == "" {
+        ""
+    } else {
+        &rest[last_index..]
+    };
     (block, rest)
 }
 
@@ -133,7 +137,8 @@ pub fn parse_directive(input: &str) -> (Directive, &str) {
             name,
             parameters,
         },
-        rest.map(|x| &x[1..]).unwrap_or_else(|| &input[last_index + 1..]),
+        rest.map(|x| &x[1..])
+            .unwrap_or_else(|| &input[last_index + 1..]),
     )
 }
 
