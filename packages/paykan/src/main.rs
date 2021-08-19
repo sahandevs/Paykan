@@ -1,8 +1,8 @@
 mod config;
 mod http_server;
+mod lazy_stream_reader;
 
 use futures::future::join_all;
-use std::convert::Infallible;
 use crate::config::Config;
 
 #[tokio::main]
