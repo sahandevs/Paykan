@@ -60,9 +60,9 @@ impl From<Block> for Config {
 
 #[cfg(test)]
 mod test {
-    use std::net::SocketAddr;
-    use parser::parse;
     use super::*;
+    use parser::parse;
+    use std::net::SocketAddr;
 
     #[test]
     fn test_config() {

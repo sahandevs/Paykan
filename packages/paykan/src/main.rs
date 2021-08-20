@@ -2,8 +2,8 @@ mod config;
 mod http_server;
 mod lazy_stream_reader;
 
-use futures::future::join_all;
 use crate::config::Config;
+use futures::future::join_all;
 
 #[tokio::main]
 async fn main() {
@@ -21,7 +21,10 @@ async fn main() {
     }
     "#,
     ));
-    let servers = config.http.servers.iter()
+    let servers = config
+        .http
+        .servers
+        .iter()
         .map(|server| http_server::serve(server));
 
     join_all(servers).await;

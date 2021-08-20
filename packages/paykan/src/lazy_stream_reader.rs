@@ -105,7 +105,7 @@ mod tests {
         let payload = b"GET /hello.htm HTTP/1.1";
         let mock_read = MockRead(payload.to_vec());
         let mut reader = HttpLazyStreamReader::new(Box::pin(mock_read));
-        let mock_read = unsafe { &*(addr_of_mut!(reader.stream) as *mut Pin<Box<MockRead>>) };
+        let mock_read = unsafe { &*(addr_of_mut!(reader.stream) as *mut Box<MockRead>) };
         assert!(&mock_read.0.len() == &payload.len());
         let method = reader.method().await;
         assert!(&mock_read.0.len() == &(payload.len() - 4));
