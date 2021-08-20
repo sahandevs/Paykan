@@ -106,21 +106,9 @@ mod tests {
     }
 
     macro_rules! ident_to_method {
-        (GET) => {{
-            ("GET", HttpMethod::Get)
-        }};
-        (POST) => {{
-            ("POST", HttpMethod::Post)
-        }};
-        (HEAD) => {{
-            ("HEAD", HttpMethod::Head)
-        }};
-        (PUT) => {{
-            ("PUT", HttpMethod::Put)
-        }};
-        (DELETE) => {{
-            ("DELETE", HttpMethod::Delete)
-        }};
+        ($m: ident) => {
+            paste! { HttpMethod::[<$m:camel>] }
+        };
     }
 
     macro_rules! test_method {
@@ -128,7 +116,10 @@ mod tests {
             paste! {
             #[tokio::test]
             async fn [<test_method_ $m:lower>]() {
-                let (m_str, m_enum) = ident_to_method!($m);
+                let (m_str, m_enum) = (
+                    stringify!($m),
+                    ident_to_method!($m)
+                );
                 let payload = format!("{} /hello.htm HTTP/1.1", m_str);
                 let payload = payload.as_bytes();
                 let mock_read = MockRead(payload.to_vec());
