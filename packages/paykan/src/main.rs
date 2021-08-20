@@ -1,6 +1,6 @@
-mod config;
-mod http_server;
-mod lazy_stream_reader;
+pub mod config;
+pub mod http_server;
+pub mod lazy_stream_reader;
 
 use crate::config::Config;
 use futures::future::join_all;

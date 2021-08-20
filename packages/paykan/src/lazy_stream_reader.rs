@@ -18,6 +18,7 @@ pub enum HttpMethod {
     Post,
     Delete,
     Put,
+    Head,
 }
 
 pub enum HttpVersion {
@@ -67,6 +68,10 @@ impl HttpLazyStreamReader {
 
         let result = match &method[..] {
             b"GET" => HttpMethod::Get,
+            b"POST" => HttpMethod::Post,
+            b"PUT" => HttpMethod::Put,
+            b"DELETE" => HttpMethod::Delete,
+            b"HEAD" => HttpMethod::Head,
             _ => panic!(""),
         };
 
@@ -83,9 +88,9 @@ impl HttpLazyStreamReader {
 
 #[cfg(test)]
 mod tests {
-    use std::{ptr::addr_of_mut, task::Poll};
-
     use super::*;
+    use paste::paste;
+    use std::{ptr::addr_of_mut, task::Poll};
 
     struct MockRead(Vec<u8>);
     impl AsyncRead for MockRead {
@@ -100,18 +105,55 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_method() {
-        let payload = b"GET /hello.htm HTTP/1.1";
-        let mock_read = MockRead(payload.to_vec());
-        let mut reader = HttpLazyStreamReader::new(Box::pin(mock_read));
-        let mock_read = unsafe { &*(addr_of_mut!(reader.stream) as *mut Box<MockRead>) };
-        assert!(&mock_read.0.len() == &payload.len());
-        let method = reader.method().await;
-        assert!(&mock_read.0.len() == &(payload.len() - 4));
-        assert_eq!(&HttpMethod::Get, method);
-        let method = reader.method().await;
-        assert!(&mock_read.0.len() == &(payload.len() - 4));
-        assert_eq!(&HttpMethod::Get, method);
+    macro_rules! ident_to_method {
+        (GET) => {{
+            ("GET", HttpMethod::Get)
+        }};
+        (POST) => {{
+            ("POST", HttpMethod::Post)
+        }};
+        (HEAD) => {{
+            ("HEAD", HttpMethod::Head)
+        }};
+        (PUT) => {{
+            ("PUT", HttpMethod::Put)
+        }};
+        (DELETE) => {{
+            ("DELETE", HttpMethod::Delete)
+        }};
     }
+
+    macro_rules! test_method {
+        ($m: ident) => {
+            paste! {
+            #[tokio::test]
+            async fn [<test_method_ $m:lower>]() {
+                let (m_str, m_enum) = ident_to_method!($m);
+                let payload = format!("{} /hello.htm HTTP/1.1", m_str);
+                let payload = payload.as_bytes();
+                let mock_read = MockRead(payload.to_vec());
+                let mut reader = HttpLazyStreamReader::new(Box::pin(mock_read));
+                let mock_read = unsafe { &*(addr_of_mut!(reader.stream) as *mut Box<MockRead>) };
+                let method_size = m_str.len() + 1;
+                assert!(&mock_read.0.len() == &payload.len());
+                let method = reader.method().await;
+                assert!(&mock_read.0.len() == &(payload.len() - method_size));
+                assert_eq!(&m_enum, method);
+                let method = reader.method().await;
+                assert!(&mock_read.0.len() == &(payload.len() - method_size));
+                assert_eq!(&m_enum, method);
+            }
+        }};
+        ($($m:ident)* ) => {
+            $(
+                test_method!($m);
+            )*
+        }
+    }
+
+    test_method!(POST);
+    test_method!(PUT);
+    test_method!(DELETE);
+    test_method!(HEAD);
+    test_method!(GET);
 }
