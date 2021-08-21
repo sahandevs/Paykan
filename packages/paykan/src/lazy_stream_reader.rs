@@ -1,5 +1,9 @@
-use std::{hint::unreachable_unchecked, pin::Pin};
-
+use std::{
+    borrow::Borrow,
+    cell::{Ref, RefCell},
+    hint::unreachable_unchecked,
+    pin::Pin,
+};
 use tokio::io::{AsyncRead, AsyncReadExt};
 /*
 
@@ -30,13 +34,13 @@ pub enum HttpVersion {
 
 #[derive(Default)]
 struct Inner {
-    method: Option<HttpMethod>,
-    resource: Option<String>,
-    version: Option<HttpVersion>,
+    method: RefCell<Option<HttpMethod>>,
+    resource: RefCell<Option<String>>,
+    version: RefCell<Option<HttpVersion>>,
 }
 
 pub struct HttpLazyStreamReader {
-    stream: Pin<Box<dyn AsyncRead>>,
+    stream: RefCell<Pin<Box<dyn AsyncRead>>>,
     inner: Inner,
     buffer: Vec<u8>,
 }
@@ -44,25 +48,28 @@ pub struct HttpLazyStreamReader {
 impl HttpLazyStreamReader {
     pub fn new(stream: Pin<Box<dyn AsyncRead>>) -> Self {
         Self {
-            stream,
+            stream: RefCell::new(stream),
             inner: Inner::default(),
             buffer: Vec::new(),
         }
     }
 
-    pub async fn method(&mut self) -> &HttpMethod {
-        let inner_method = &mut self.inner.method;
-        if let Some(x) = inner_method {
-            return x;
+    pub async fn method(&self) -> Ref<'_, HttpMethod> {
+        let inner_method = self.inner.method.borrow();
+        if inner_method.is_some() {
+            return Ref::map(inner_method, |x| x.as_ref().unwrap());
         }
         let mut method = Vec::with_capacity(10);
-        loop {
-            let mut buf = [0u8; 1];
-            self.stream.read(&mut buf).await.unwrap();
-            match buf[0] {
-                0 => panic!(""),
-                b' ' => break,
-                x => method.push(x),
+        {
+            let mut stream = self.stream.borrow_mut();
+            loop {
+                let mut buf = [0u8; 1];
+                stream.read(&mut buf).await.unwrap();
+                match buf[0] {
+                    0 => panic!(""),
+                    b' ' => break,
+                    x => method.push(x),
+                }
             }
         }
 
@@ -74,15 +81,14 @@ impl HttpLazyStreamReader {
             b"HEAD" => HttpMethod::Head,
             _ => panic!(""),
         };
-
-        *inner_method = Some(result);
-
-        match inner_method {
-            Some(x) => x,
-            _ => unsafe {
-                unreachable_unchecked();
-            },
+        drop(inner_method);
+        {
+            let inner_method = &mut self.inner.method.borrow_mut();
+            **inner_method = Some(result);
+            // decrement the mut count
         }
+        let inner_method = self.inner.method.borrow();
+        return Ref::map(inner_method, |x| x.as_ref().unwrap());
     }
 }
 
@@ -105,6 +111,19 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_method_can_pattern_match() {
+        let payload = format!("{} /hello.htm HTTP/1.1", "GET");
+        let payload = payload.as_bytes();
+        let mock_read = MockRead(payload.to_vec());
+        let reader = HttpLazyStreamReader::new(Box::pin(mock_read));
+        let result = reader.method().await;
+        if let HttpMethod::Get = *result {
+        } else {
+            assert!(false, "should match");
+        }
+    }
+
     macro_rules! ident_to_method {
         ($m: ident) => {
             paste! { HttpMethod::[<$m:camel>] }
@@ -123,16 +142,17 @@ mod tests {
                 let payload = format!("{} /hello.htm HTTP/1.1", m_str);
                 let payload = payload.as_bytes();
                 let mock_read = MockRead(payload.to_vec());
-                let mut reader = HttpLazyStreamReader::new(Box::pin(mock_read));
-                let mock_read = unsafe { &*(addr_of_mut!(reader.stream) as *mut Box<MockRead>) };
+                let mut stream = Box::pin(mock_read);
+                let mock_read = unsafe { &*(addr_of_mut!(stream) as *mut Box<MockRead>) };
+                let reader = HttpLazyStreamReader::new(stream);
                 let method_size = m_str.len() + 1;
                 assert!(&mock_read.0.len() == &payload.len());
                 let method = reader.method().await;
                 assert!(&mock_read.0.len() == &(payload.len() - method_size));
-                assert_eq!(&m_enum, method);
+                assert_eq!(m_enum, *method);
                 let method = reader.method().await;
                 assert!(&mock_read.0.len() == &(payload.len() - method_size));
-                assert_eq!(&m_enum, method);
+                assert_eq!(m_enum, *method);
             }
         }};
         ($($m:ident)* ) => {
