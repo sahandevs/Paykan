@@ -34,7 +34,7 @@ pub enum HttpVersion {
 #[derive(Default)]
 struct Inner {
     method: RefCell<Option<HttpMethod>>,
-    _resource: RefCell<Option<String>>,
+    resource: RefCell<Option<String>>,
     _version: RefCell<Option<HttpVersion>>,
 }
 
@@ -70,7 +70,10 @@ impl AsyncReadStream {
         }
         if self.cursor >= self.max_cursor {
             let mut buff = [0u8; 1024];
-            let n = self.stream.read(&mut buff).await.ok()?;
+            let n = match self.stream.read(&mut buff).await {
+                Ok(x) => x,
+                _ => 0,
+            };
             if n == 0 {
                 self.finished = true;
                 return None;
@@ -87,6 +90,43 @@ impl AsyncReadStream {
     }
 }
 
+macro_rules! add_part {
+    (
+        Name: $name:tt,
+        Type: $ret:ident,
+        Before: $before: tt,
+        Parser: |$stream: ident| $parser: expr,
+    ) => {
+        pub async fn $name(&self) -> Ref<'_, $ret> {
+            let inner = self.inner.$name.borrow();
+            if inner.is_some() {
+                return Ref::map(inner, |x| x.as_ref().unwrap());
+            }
+            drop(inner);
+            add_part!(@check-before self, $name, $before);
+            #[allow(unused_mut)]
+            let mut $stream = self.stream.borrow_mut();
+            let result = $parser;
+            let result = result.await;
+            drop($stream);
+            {
+                let inner = &mut self.inner.$name.borrow_mut();
+                **inner = Some(result);
+                // decrement the mut count
+            }
+            let inner = self.inner.$name.borrow();
+            return Ref::map(inner, |x| x.as_ref().unwrap());
+        }
+    };
+    (@check-before $rec:ident, $name:ident, None) => {};
+    (@check-before $rec:ident, $name:ident, $before: ident) => {{
+        let no_before = $rec.inner.$before.borrow().is_none();
+        if no_before {
+            drop($rec.$before().await);
+        }
+    }}
+}
+
 impl HttpLazyStreamReader {
     pub fn new(stream: Pin<Box<dyn AsyncRead>>) -> Self {
         let stream_reader = AsyncReadStream::new(stream);
@@ -96,40 +136,46 @@ impl HttpLazyStreamReader {
         }
     }
 
-    pub async fn method(&self) -> Ref<'_, HttpMethod> {
-        let inner_method = self.inner.method.borrow();
-        if inner_method.is_some() {
-            return Ref::map(inner_method, |x| x.as_ref().unwrap());
-        }
-        let mut method = Vec::with_capacity(10);
-        {
-            let mut stream = self.stream.borrow_mut();
-            'outer: while let Some(b) = stream.next().await {
+    add_part!(
+        Name: method,
+        Type: HttpMethod,
+        Before: None,
+        Parser: |stream| async {
+            let mut method = Vec::with_capacity(10);
+            while let Some(b) = stream.next().await {
                 match b {
                     0 => panic!(""),
-                    b' ' => break 'outer,
+                    b' ' => break,
                     x => method.push(x),
                 }
             }
-        }
+            match &method[..] {
+                b"GET" => HttpMethod::Get,
+                b"POST" => HttpMethod::Post,
+                b"PUT" => HttpMethod::Put,
+                b"DELETE" => HttpMethod::Delete,
+                b"HEAD" => HttpMethod::Head,
+                _ => panic!(""),
+            }
+        },
+    );
 
-        let result = match &method[..] {
-            b"GET" => HttpMethod::Get,
-            b"POST" => HttpMethod::Post,
-            b"PUT" => HttpMethod::Put,
-            b"DELETE" => HttpMethod::Delete,
-            b"HEAD" => HttpMethod::Head,
-            _ => panic!(""),
-        };
-        drop(inner_method);
-        {
-            let inner_method = &mut self.inner.method.borrow_mut();
-            **inner_method = Some(result);
-            // decrement the mut count
-        }
-        let inner_method = self.inner.method.borrow();
-        return Ref::map(inner_method, |x| x.as_ref().unwrap());
-    }
+    add_part!(
+        Name: resource,
+        Type: String,
+        Before: method,
+        Parser: |stream| async {
+            let mut resource = Vec::with_capacity(10);
+            while let Some(b) = stream.next().await {
+                match b {
+                    0 => panic!(""),
+                    b' ' => break,
+                    x => resource.push(x),
+                }
+            }
+            String::from_utf8(resource).unwrap()
+        },
+    );
 }
 
 #[cfg(test)]
@@ -165,42 +211,74 @@ mod tests {
         }
     }
 
-    macro_rules! ident_to_method {
-        ($m: ident) => {
-            paste! { HttpMethod::[<$m:camel>] }
-        };
-    }
-
-    macro_rules! test_method {
-        ($m: ident) => {
+    macro_rules! test {
+        (@test $m: ident, ($r_name:ident, $r:literal)) => {
             paste! {
             #[tokio::test]
-            async fn [<test_method_ $m:lower>]() {
+            async fn [<test_first_method_ $m:lower _resource_ $r_name:lower>]() {
                 let (m_str, m_enum) = (
                     stringify!($m),
-                    ident_to_method!($m)
+                    HttpMethod::[<$m:camel>]
                 );
-                let payload = format!("{} /hello.htm HTTP/1.1", m_str);
+                let expected_resource = $r;
+                let payload = format!("{} {} HTTP/1.1", m_str, expected_resource);
                 let payload = payload.as_bytes();
                 let mock_read = MockRead(payload.to_vec());
                 let stream = Box::pin(mock_read);
                 let reader = HttpLazyStreamReader::new(stream);
+                // read method
+                let method = reader.method().await;
+                assert_eq!(m_enum, *method);
+                let method = reader.method().await;
+                assert_eq!(m_enum, *method);
+                // read resource
+                let resource = reader.resource().await;
+                assert_eq!(*resource, *expected_resource);
+                let resource = reader.resource().await;
+                assert_eq!(*resource, *expected_resource);
+            }
+
+            #[tokio::test]
+            async fn [<test_first_resource_ $r_name:lower _method_ $m:lower >]() {
+                let (m_str, m_enum) = (
+                    stringify!($m),
+                    HttpMethod::[<$m:camel>]
+                );
+                let expected_resource = $r;
+                let payload = format!("{} {} HTTP/1.1", m_str, expected_resource);
+                let payload = payload.as_bytes();
+                let mock_read = MockRead(payload.to_vec());
+                let stream = Box::pin(mock_read);
+                let reader = HttpLazyStreamReader::new(stream);
+                // read resource
+                let resource = reader.resource().await;
+                assert_eq!(*resource, *expected_resource);
+                let resource = reader.resource().await;
+                assert_eq!(*resource, *expected_resource);
+                // read method
                 let method = reader.method().await;
                 assert_eq!(m_enum, *method);
                 let method = reader.method().await;
                 assert_eq!(m_enum, *method);
             }
         }};
-        ($($m:ident)* ) => {
+        (@test-resource ($r_name:ident, $r:literal), ($($m:ident),*)) => {
             $(
-                test_method!($m);
+                test!(@test $m, ($r_name, $r));
+            )*
+        };
+        ({
+            Resources: $(($r_name:ident, $r:literal))*,
+            Methods: $m:tt,
+        }) => {
+            $(
+                test!(@test-resource ($r_name, $r), $m);
             )*
         }
     }
 
-    test_method!(POST);
-    test_method!(PUT);
-    test_method!(DELETE);
-    test_method!(HEAD);
-    test_method!(GET);
+    test!({
+        Resources: (home, "/home") (root, "/"),
+        Methods: (GET, POST, PUT, DELETE, HEAD),
+    });
 }
