@@ -1,3 +1,4 @@
+use chashmap::{CHashMap, ReadGuard};
 use std::{
     cell::{Ref, RefCell},
     pin::Pin,
@@ -36,6 +37,8 @@ struct Inner {
     method: RefCell<Option<HttpMethod>>,
     resource: RefCell<Option<String>>,
     version: RefCell<Option<HttpVersion>>,
+    headers: CHashMap<String, String>,
+    headers_finished: bool,
 }
 
 pub struct HttpLazyStreamReader {
@@ -104,7 +107,7 @@ macro_rules! add_part {
                 return Ref::map(inner, |x| x.as_ref().unwrap());
             }
             drop(inner);
-            add_part!(@check-before self, $name, $before);
+            add_part!(@check-before self, $before);
             #[allow(unused_mut)]
             let mut $stream = self.stream.borrow_mut();
             let result = $parser;
@@ -119,8 +122,8 @@ macro_rules! add_part {
             return Ref::map(inner, |x| x.as_ref().unwrap());
         }
     };
-    (@check-before $rec:ident, $name:ident, None) => {};
-    (@check-before $rec:ident, $name:ident, $before: ident) => {{
+    (@check-before $rec:ident, None) => {};
+    (@check-before $rec:ident, $before: ident) => {{
         let no_before = $rec.inner.$before.borrow().is_none();
         if no_before {
             drop($rec.$before().await);
@@ -200,6 +203,82 @@ impl HttpLazyStreamReader {
         },
     );
 
+    async fn header_inner<'a>(
+        &'a self,
+        name: &str,
+        get_all: bool,
+    ) -> Option<ReadGuard<'a, String, String>> {
+        {
+            /* return value if pressent */
+            let val = self.inner.headers.get(name);
+            if val.is_some() {
+                return val;
+            }
+        };
+        if self.inner.headers_finished {
+            return None;
+        }
+        // we should've parsed until http version
+        add_part!(@check-before self, version);
+
+        let mut stream = self.stream.borrow_mut();
+        let mut has_more_headers = true;
+        'outer: loop {
+            let mut header_name = Vec::with_capacity(10);
+            let mut header_value = Vec::with_capacity(10);
+            let mut is_name = true;
+            let mut is_start = true;
+            'inner: while let Some(b) = stream.next().await {
+                let container = if is_name {
+                    &mut header_name
+                } else {
+                    &mut header_value
+                };
+                match b {
+                    0 => panic!(""),
+                    b'\n' => {
+                        if is_start {
+                            has_more_headers = false;
+                        } else {
+                            // header row is finished
+                            break 'inner;
+                        }
+                    }
+                    b'\r' => {
+                        // header is finished
+                        break 'outer;
+                    }
+                    x => {
+                        if !has_more_headers {
+                            panic!("expected '\\r' found '{}'", x);
+                        }
+                        is_start = false;
+                        if x != b':' {
+                            container.push(x);
+                        } else {
+                            is_name = false;
+                        }
+                    }
+                };
+            }
+            let header_name = String::from_utf8(header_name).unwrap();
+            let found = !get_all && header_name == name;
+            let header_value = String::from_utf8(header_value).unwrap();
+            self.inner.headers.insert(header_name, header_value);
+            if found {
+                let val = self.inner.headers.get(name);
+                return val;
+            }
+        }
+
+        None
+    }
+
+    pub async fn header<'a>(&'a self, name: &str) -> Option<ReadGuard<'a, String, String>> {
+        self.header_inner(name, false).await
+    }
+
+    // TODO: add body support
 }
 
 #[cfg(test)]
@@ -307,4 +386,6 @@ mod tests {
     });
 
     // TODO: add support for more type of tests
+    // TODO: add multi thread tests
+    // TODO: add support for incomplete streams
 }
