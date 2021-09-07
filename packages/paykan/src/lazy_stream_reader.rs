@@ -35,7 +35,7 @@ pub enum HttpVersion {
 struct Inner {
     method: RefCell<Option<HttpMethod>>,
     resource: RefCell<Option<String>>,
-    _version: RefCell<Option<HttpVersion>>,
+    version: RefCell<Option<HttpVersion>>,
 }
 
 pub struct HttpLazyStreamReader {
@@ -64,6 +64,7 @@ impl AsyncReadStream {
 }
 
 impl AsyncReadStream {
+    #[inline(always)]
     async fn next(&mut self) -> Option<u8> {
         if self.finished {
             return None;
@@ -176,6 +177,29 @@ impl HttpLazyStreamReader {
             String::from_utf8(resource).unwrap()
         },
     );
+
+    add_part!(
+        Name: version,
+        Type: HttpVersion,
+        Before: resource,
+        Parser: |stream| async {
+            let mut version = Vec::with_capacity(10);
+            while let Some(b) = stream.next().await {
+                match b {
+                    0 => panic!(""),
+                    b'\n' => break,
+                    x => version.push(x),
+                }
+            }
+            match &version[..] {
+                b"HTTP/0.9" => HttpVersion::Http0_9,
+                b"HTTP/1.0" => HttpVersion::Http1_0,
+                b"HTTP/1.1" => HttpVersion::Http1_1,
+                _ => panic!("{:?} is not supported", &version),
+            }
+        },
+    );
+
 }
 
 #[cfg(test)]
@@ -281,4 +305,6 @@ mod tests {
         Resources: (home, "/home") (root, "/"),
         Methods: (GET, POST, PUT, DELETE, HEAD),
     });
+
+    // TODO: add support for more type of tests
 }
